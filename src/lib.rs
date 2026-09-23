@@ -6,7 +6,7 @@ pub mod prompt;
 use crate::config::read_config;
 use crate::oauth_device::*;
 use oauth2::{TokenIntrospectionResponse, TokenResponse};
-use pam::constants::{PamFlag, PamResultCode, PAM_PROMPT_ECHO_OFF};
+use pam::constants::{PamFlag, PamResultCode, PAM_PROMPT_ECHO_OFF, PAM_TEXT_INFO};
 
 use crate::prompt::UserPrompt;
 use logger::{DefaultLogger, Logger};
@@ -86,7 +86,23 @@ impl PamHooks for PamOAuth2Device {
         log::debug!("User prompt: {:#?}", user_prompt);
 
         // Render user prompt
-        pam_try!(conv.send(PAM_PROMPT_ECHO_OFF, &user_prompt.to_string()));
+        // Split across two PAM messages for iRODS pam_interactive.
+        //
+        // pam_interactive derives a JSON Pointer from the raw text of a
+        // Waiting/WaitingPw prompt by concatenating "/" with it, without the
+        // RFC 6901 escaping of "/" and "~". Any slash in the text therefore
+        // becomes a path separator, and the JSON Patch it applies next throws
+        // out_of_range.403 on the absent parent. A device flow's text always
+        // carries a URL, so this is unconditional rather than occasional.
+        //
+        // PAM_TEXT_INFO maps to state Next, which pam_interactive only
+        // displays. The address and code travel there, and the prompt that
+        // collects the reply is kept free of slashes.
+        pam_try!(conv.send(PAM_TEXT_INFO, &user_prompt.to_string()));
+        pam_try!(conv.send(
+            PAM_PROMPT_ECHO_OFF,
+            "Press ENTER when you have approved the login"
+        ));
 
         let token = try_or_handle!(
             oauth_client.get_token(&device_code_resp, config.oauth_device_token_polling_timeout),
