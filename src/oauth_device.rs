@@ -4,8 +4,8 @@ use crate::config::Config;
 use chrono::{DateTime, Utc};
 use oauth2::basic::{BasicClient, BasicTokenResponse};
 use oauth2::{
-    AccessToken, AuthUrl, ClientId, ClientSecret, DeviceAuthorizationUrl, IntrospectionUrl,
-    RedirectUrl, Scope, TokenIntrospectionResponse, TokenUrl,
+    AccessToken, AuthType, AuthUrl, ClientId, ClientSecret, DeviceAuthorizationUrl,
+    IntrospectionUrl, RedirectUrl, Scope, TokenIntrospectionResponse, TokenUrl,
 };
 use oauth2::{CurlHttpClient as http_client, EndpointSet};
 use oauth2::{EndpointNotSet, StandardDeviceAuthorizationResponse};
@@ -41,6 +41,9 @@ impl OAuthClient {
 
         let client = BasicClient::new(client_id)
             .set_client_secret(client_secret)
+            // RFC 8628 servers built on oauthlib read client_id only from the
+            // body of a device authorization request and refuse HTTP Basic.
+            .set_auth_type(AuthType::RequestBody)
             .set_auth_uri(auth_url)
             .set_token_uri(token_url)
             .set_device_authorization_url(device_url)
