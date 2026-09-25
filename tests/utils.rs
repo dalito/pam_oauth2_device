@@ -25,6 +25,7 @@ pub(crate) struct Mock {
     scope: Option<String>,
     active: bool,
     exp: Option<DateTime<Utc>>,
+    introspected_client_id: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -36,6 +37,7 @@ impl Mock {
             scope: None,
             active: true,
             exp: Some(chrono::Utc::now() + Duration::seconds(3600)),
+            introspected_client_id: Some("test".to_string()),
         })
     }
 }
@@ -48,6 +50,7 @@ impl MockBuilder {
     builder_setter!(username, optional & str);
     builder_setter!(scope, optional & str);
     builder_setter!(exp, optional DateTime<Utc>);
+    builder_setter!(introspected_client_id, optional & str);
 
     pub(crate) fn init(self, pam_scopes: Option<&str>) -> (Mock, OAuthClient) {
         let config = mock_config(&self.0.server.url(), pam_scopes);
@@ -59,6 +62,7 @@ impl MockBuilder {
             scope: self.0.scope,
             active: self.0.active,
             exp: self.0.exp,
+            introspected_client_id: self.0.introspected_client_id,
         };
         (mock, oauth_client)
     }
@@ -74,6 +78,7 @@ pub(crate) fn mock_config(url: &String, scope: Option<&str>) -> Config {
         oauth_device_url: Url::parse(&format!("{}/{}", url, "device")).unwrap(),
         oauth_token_url: Url::parse(&format!("{}/{}", url, "token")).unwrap(),
         oauth_token_introspect_url: Url::parse(&format!("{}/{}", url, "introspect")).unwrap(),
+        oauth_token_revoke_url: Some(Url::parse(&format!("{}/{}", url, "revoke")).unwrap()),
         oauth_device_token_polling_timeout: None,
         scopes: scope.unwrap_or_default(),
         qr_enabled: false,
@@ -159,12 +164,17 @@ impl Mock {
             .as_ref()
             .map(|e| format!("{}", e.timestamp()))
             .unwrap_or("null".to_string());
+        let client_id = self
+            .introspected_client_id
+            .as_ref()
+            .map(|c| format!(r#""{}""#, c))
+            .unwrap_or("null".to_string());
         let body = match status {
             200..=299 => format!(
                 r#"{{
         "active": {},
         "scope": {},
-        "client_id": "test",
+        "client_id": {},
         "username": {},
         "token_type": "Bearer",
         "exp": {},
@@ -173,7 +183,7 @@ impl Mock {
         "aud": "test",
         "iss": "test"
             }}"#,
-                self.active, scope, username, exp
+                self.active, scope, client_id, username, exp
             ),
             _ => {
                 format!(
@@ -189,5 +199,19 @@ impl Mock {
             .with_status(status)
             .with_body(body)
             .create();
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn http_revoke_with_status(&mut self, status: usize) -> mockito::Mock {
+        self.server
+            .mock("POST", "/revoke")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("token".into(), "mocking_access_token".into()),
+                mockito::Matcher::UrlEncoded("token_type_hint".into(), "access_token".into()),
+                mockito::Matcher::UrlEncoded("client_id".into(), "test".into()),
+                mockito::Matcher::UrlEncoded("client_secret".into(), "test".into()),
+            ]))
+            .with_status(status)
+            .create()
     }
 }

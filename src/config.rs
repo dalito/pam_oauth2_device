@@ -15,6 +15,8 @@ pub struct Config {
     pub oauth_token_url: Url,
     pub oauth_token_introspect_url: Url,
     #[serde(default)]
+    pub oauth_token_revoke_url: Option<Url>,
+    #[serde(default)]
     #[serde_as(as = "Option<serde_with::DurationSeconds<u64>>")]
     pub oauth_device_token_polling_timeout: Option<Duration>,
 

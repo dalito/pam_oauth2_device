@@ -3,12 +3,14 @@ use std::time::Duration;
 use crate::config::Config;
 use chrono::{DateTime, Utc};
 use oauth2::basic::{BasicClient, BasicTokenResponse};
+use oauth2::{http, SyncHttpClient};
 use oauth2::{
     AccessToken, AuthType, AuthUrl, ClientId, ClientSecret, DeviceAuthorizationUrl,
     IntrospectionUrl, RedirectUrl, Scope, TokenIntrospectionResponse, TokenUrl,
 };
 use oauth2::{CurlHttpClient as http_client, EndpointSet};
 use oauth2::{EndpointNotSet, StandardDeviceAuthorizationResponse};
+use url::Url;
 
 type DynErr = Box<dyn std::error::Error>;
 
@@ -22,12 +24,17 @@ pub struct OAuthClient {
         EndpointSet,    //HasTokenUrl
     >,
     scopes: Vec<Scope>,
+    client_id: ClientId,
+    client_secret: ClientSecret,
+    revoke_url: Option<Url>,
 }
 
 impl OAuthClient {
     pub fn new(c: &Config) -> Result<Self, DynErr> {
         let client_id = ClientId::new(c.client_id.clone());
         let client_secret = ClientSecret::new(c.client_secret.clone());
+        let own_client_id = client_id.clone();
+        let own_client_secret = client_secret.clone();
         let auth_url = AuthUrl::from_url(c.oauth_auth_url.clone());
         let token_url = TokenUrl::from_url(c.oauth_token_url.clone());
         let device_url = DeviceAuthorizationUrl::from_url(c.oauth_device_url.clone());
@@ -50,7 +57,13 @@ impl OAuthClient {
             .set_introspection_url(introspect_url)
             .set_redirect_uri(redirect_url);
 
-        Ok(Self { client, scopes })
+        Ok(Self {
+            client,
+            scopes,
+            client_id: own_client_id,
+            client_secret: own_client_secret,
+            revoke_url: c.oauth_token_revoke_url.clone(),
+        })
     }
 
     pub fn scopes(&self) -> &[Scope] {
@@ -122,6 +135,57 @@ impl OAuthClient {
         );
 
         username_valid && scope_valid && exp_valid
+    }
+
+    /// Whether the introspected token was issued to this module's own client.
+    ///
+    /// Token mode accepts only tokens CaReD minted for the sign-in application;
+    /// any other token of the same user, an API bearer say, is refused.
+    pub fn issued_to_me(&self, token: &impl TokenIntrospectionResponse) -> bool {
+        match token.client_id() {
+            Some(client_id) if client_id.as_str() == self.client_id.as_str() => true,
+            Some(client_id) => {
+                log::warn!("Token issued to another client: {}", client_id.as_str());
+                false
+            }
+            None => {
+                log::warn!("No client_id provided in token");
+                false
+            }
+        }
+    }
+
+    /// Revoke `token` at the configured endpoint (RFC 7009).
+    ///
+    /// Sent by hand rather than through `Client::revoke_token`, which refuses a
+    /// revocation URL that is not https; a development CaReD is reached over
+    /// http. Credentials travel in the body, as for every other request here.
+    /// An error never carries the token.
+    pub fn revoke(&self, token: &AccessToken) -> Result<(), DynErr> {
+        let url = self
+            .revoke_url
+            .as_ref()
+            .ok_or("oauth_token_revoke_url is not configured")?;
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("token", token.secret())
+            .append_pair("token_type_hint", "access_token")
+            .append_pair("client_id", self.client_id.as_str())
+            .append_pair("client_secret", self.client_secret.secret())
+            .finish();
+        let request = http::Request::builder()
+            .method(http::Method::POST)
+            .uri(url.as_str())
+            .header(
+                http::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .header(http::header::ACCEPT, "application/json")
+            .body(body.into_bytes())?;
+        let response = http_client.call(request)?;
+        if !response.status().is_success() {
+            return Err(format!("revocation answered {}", response.status()).into());
+        }
+        Ok(())
     }
 }
 

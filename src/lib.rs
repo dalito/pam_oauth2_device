@@ -5,6 +5,7 @@ pub mod prompt;
 
 use crate::config::read_config;
 use crate::oauth_device::*;
+use oauth2::AccessToken;
 use oauth2::{TokenIntrospectionResponse, TokenResponse};
 use pam::constants::{PamFlag, PamResultCode, PAM_PROMPT_ECHO_OFF, PAM_TEXT_INFO};
 
@@ -70,6 +71,10 @@ impl PamHooks for PamOAuth2Device {
             PamResultCode::PAM_SYSTEM_ERR
         );
         log::debug!("OAuth Client: {:#?}", oauth_client);
+
+        if args.get("mode").map(String::as_str) == Some("token") {
+            return authenticate_token(&conv, &oauth_client, &local_username);
+        }
 
         let device_code_resp = try_or_handle!(
             oauth_client.device_code(),
@@ -154,6 +159,53 @@ impl PamHooks for PamOAuth2Device {
     ) -> PamResultCode {
         PamResultCode::PAM_IGNORE
     }
+}
+
+/// Sign in with a single-use token the client sends as its password.
+///
+/// iRODS `pam_password` runs this stack through `irodsPamAuthCheck`, whose
+/// conversation answers an echo-off prompt with what the client sent. The
+/// token must pass the device path's own checks and name this module's client,
+/// and it is revoked before success is returned, so a failed revocation fails
+/// the login and a token signs in at most once.
+fn authenticate_token(
+    conv: &Conv,
+    oauth_client: &OAuthClient,
+    local_username: &str,
+) -> PamResultCode {
+    let reply = match conv.send(PAM_PROMPT_ECHO_OFF, "Password: ") {
+        Ok(Some(reply)) => reply,
+        Ok(None) => {
+            log::warn!("No password supplied for user: {local_username}");
+            return PamResultCode::PAM_AUTH_ERR;
+        }
+        Err(code) => return code,
+    };
+    let Ok(secret) = reply.as_str() else {
+        log::warn!("Password for user {local_username} is not UTF-8");
+        return PamResultCode::PAM_AUTH_ERR;
+    };
+    let token = AccessToken::new(secret.to_string());
+
+    let introspection = try_or_handle!(
+        oauth_client.introspect(&token),
+        "Failed to introspect sign-in password",
+        PamResultCode::PAM_AUTH_ERR
+    );
+    if !(oauth_client.validate_token(&introspection, local_username)
+        && oauth_client.issued_to_me(&introspection))
+    {
+        log::warn!("Login failed for user: {local_username}");
+        return PamResultCode::PAM_AUTH_ERR;
+    }
+
+    try_or_handle!(
+        oauth_client.revoke(&token),
+        "Failed to revoke sign-in password",
+        PamResultCode::PAM_AUTH_ERR
+    );
+    log::info!("Password sign-in for user: {local_username}");
+    PamResultCode::PAM_SUCCESS
 }
 
 fn parse_args(args: &[&CStr]) -> HashMap<String, String> {
