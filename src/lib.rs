@@ -40,6 +40,13 @@ impl PamHooks for PamOAuth2Device {
         let log_path = args.get("logs").unwrap_or(&default_log_path);
         let log_level = args.get("log_level").unwrap_or(&default_log_level);
         DefaultLogger::init(&log_path, &log_level);
+        let mode = match sign_in_mode(&args) {
+            Ok(mode) => mode,
+            Err(value) => {
+                log::error!("Unknown mode: {value}");
+                return PamResultCode::PAM_SYSTEM_ERR;
+            }
+        };
 
         let default_config_path = "/etc/pam_oauth2_device/config.json".to_string();
         let config_path = args.get("config").unwrap_or(&default_config_path);
@@ -72,7 +79,7 @@ impl PamHooks for PamOAuth2Device {
         );
         log::debug!("OAuth Client: {:#?}", oauth_client);
 
-        if args.get("mode").map(String::as_str) == Some("token") {
+        if mode == Mode::Token {
             return authenticate_token(&conv, &oauth_client, &local_username);
         }
 
@@ -167,7 +174,7 @@ impl PamHooks for PamOAuth2Device {
 /// conversation answers an echo-off prompt with what the client sent. The
 /// token must pass the device path's own checks and name this module's client,
 /// and it is revoked before success is returned, so a failed revocation fails
-/// the login and a token signs in at most once.
+/// the login and a later sign-in with the same token is refused.
 fn authenticate_token(
     conv: &Conv,
     oauth_client: &OAuthClient,
@@ -206,6 +213,23 @@ fn authenticate_token(
     );
     log::info!("Password sign-in for user: {local_username}");
     PamResultCode::PAM_SUCCESS
+}
+
+/// How `sm_authenticate` signs a user in, chosen by the `mode` module argument.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Mode {
+    Device,
+    Token,
+}
+
+/// The sign-in mode `args` select: none for the device flow, `token` for token
+/// mode. Any other value is refused with that value rather than falling back.
+pub fn sign_in_mode(args: &HashMap<String, String>) -> Result<Mode, String> {
+    match args.get("mode").map(String::as_str) {
+        None => Ok(Mode::Device),
+        Some("token") => Ok(Mode::Token),
+        Some(other) => Err(other.to_string()),
+    }
 }
 
 fn parse_args(args: &[&CStr]) -> HashMap<String, String> {
