@@ -1,14 +1,15 @@
 use std::time::Duration;
 
 use crate::config::Config;
+use crate::http::TimedCurlClient;
 use chrono::{DateTime, Utc};
 use oauth2::basic::{BasicClient, BasicTokenResponse};
+use oauth2::EndpointSet;
 use oauth2::{http, SyncHttpClient};
 use oauth2::{
     AccessToken, AuthType, AuthUrl, ClientId, ClientSecret, DeviceAuthorizationUrl,
     IntrospectionUrl, RedirectUrl, Scope, TokenIntrospectionResponse, TokenUrl,
 };
-use oauth2::{CurlHttpClient as http_client, EndpointSet};
 use oauth2::{EndpointNotSet, StandardDeviceAuthorizationResponse};
 use url::Url;
 
@@ -27,6 +28,7 @@ pub struct OAuthClient {
     client_id: ClientId,
     client_secret: ClientSecret,
     revoke_url: Option<Url>,
+    http_client: TimedCurlClient,
 }
 
 impl OAuthClient {
@@ -63,6 +65,9 @@ impl OAuthClient {
             client_id: own_client_id,
             client_secret: own_client_secret,
             revoke_url: c.oauth_token_revoke_url.clone(),
+            http_client: TimedCurlClient {
+                timeout: c.http_timeout,
+            },
         })
     }
 
@@ -75,7 +80,7 @@ impl OAuthClient {
             .client
             .exchange_device_code()
             .add_scopes(self.scopes.clone())
-            .request(&http_client)?;
+            .request(&self.http_client)?;
         Ok(details)
     }
 
@@ -85,7 +90,7 @@ impl OAuthClient {
         timeout: Option<Duration>,
     ) -> Result<BasicTokenResponse, DynErr> {
         let token = self.client.exchange_device_access_token(details).request(
-            &http_client,
+            &self.http_client,
             std::thread::sleep,
             timeout,
         )?;
@@ -96,7 +101,7 @@ impl OAuthClient {
         &self,
         token: &AccessToken,
     ) -> Result<impl TokenIntrospectionResponse, DynErr> {
-        let introspect = self.client.introspect(token).request(&http_client)?;
+        let introspect = self.client.introspect(token).request(&self.http_client)?;
         Ok(introspect)
     }
 
@@ -181,7 +186,7 @@ impl OAuthClient {
             )
             .header(http::header::ACCEPT, "application/json")
             .body(body.into_bytes())?;
-        let response = http_client.call(request)?;
+        let response = self.http_client.call(request)?;
         if !response.status().is_success() {
             return Err(format!("revocation answered {}", response.status()).into());
         }

@@ -20,6 +20,11 @@ pub struct Config {
     #[serde_as(as = "Option<serde_with::DurationSeconds<u64>>")]
     pub oauth_device_token_polling_timeout: Option<Duration>,
 
+    /// Upper bound on each HTTP request to the OAuth server, connect included.
+    #[serde(default = "default_http_timeout")]
+    #[serde_as(as = "serde_with::DurationSeconds<u64>")]
+    pub http_timeout: Duration,
+
     #[serde(default = "default_scopes")]
     pub scopes: String,
 
@@ -95,4 +100,8 @@ fn default_scopes() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_http_timeout() -> Duration {
+    Duration::from_secs(10)
 }

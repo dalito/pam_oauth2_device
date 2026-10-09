@@ -10,6 +10,7 @@
 		"scope": "openid profile",
 		"qr_enabled": true,
 		"oauth_device_token_polling_timeout": null,
+		"http_timeout": 10,
 		"massages": {
 			"prompt_complete": "Scan the QR code above or open the following link in your web browser:",
 			"prompt_no_qr_complete": "Open the following link in your web browser:",

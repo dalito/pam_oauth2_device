@@ -1,4 +1,5 @@
 pub mod config;
+pub mod http;
 pub mod logger;
 pub mod oauth_device;
 pub mod prompt;

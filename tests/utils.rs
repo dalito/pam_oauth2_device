@@ -80,6 +80,7 @@ pub(crate) fn mock_config(url: &String, scope: Option<&str>) -> Config {
         oauth_token_introspect_url: Url::parse(&format!("{}/{}", url, "introspect")).unwrap(),
         oauth_token_revoke_url: Some(Url::parse(&format!("{}/{}", url, "revoke")).unwrap()),
         oauth_device_token_polling_timeout: None,
+        http_timeout: std::time::Duration::from_secs(10),
         scopes: scope.unwrap_or_default(),
         qr_enabled: false,
         messages: Messages::default(),
